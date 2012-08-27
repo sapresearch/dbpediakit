@@ -17,6 +17,7 @@ LOCAL_FOLDER = os.path.join("~", "data", "dbpedia")
 
 TEXT_LINE_PATTERN = re.compile(r'<([^<]+?)> <[^<]+?> "(.*)"@(\w\w) .\n')
 LINK_LINE_PATTERN = re.compile(r'<([^<]+?)> <([^<]+?)> <([^<]+?)> .\n')
+TEXT_AND_DATE_LINE_PATTERN = re.compile(r'<[^<]+?(\w*)> <[^<]+?([\w-]*)>\s?"(.*)"@?\^{0,2}(\w\w|<.*>) .\n')
 
 
 article = namedtuple('article', ('id', 'title', 'text', 'lang'))
@@ -132,8 +133,9 @@ def extract_text(archive_filename, max_items=None, min_length=300,
             m = TEXT_LINE_PATTERN.match(line)
             if m is None:
                 if LINK_LINE_PATTERN.match(line) is None:
-                    logging.warn("Invalid line %d, skipping.",
-                                 current_line_number)
+                    continue
+                    #logging.warn("Invalid line %d, skipping.",
+                                 #current_line_number)
                 continue
             id = m.group(1)
             if strip_prefix:
@@ -144,11 +146,52 @@ def extract_text(archive_filename, max_items=None, min_length=300,
                 continue
             title = unquote(id).replace('_', ' ')
             text = m.group(2).decode('unicode-escape')
+            print "title: " + title + ". text: " + text + ". last: " + m.group(3)
             if len(text) < min_length:
                 continue
             lang = m.group(3)
             yield article(id, title, text, lang)
             extracted += 1
+
+def extract_triple(archive_filename, max_items=None, min_length=300,
+                 strip_prefix="http://dbpedia.org/resource/",
+                 max_id_length=300):
+    """Extract and decode text literals on the fly
+
+    Return a generator of article(id, title, text) named tuples:
+    - id is the raw DBpedia id of the resource (without the resource prefix).
+    - title is the decoded id that should match the Wikipedia title of the
+      article.
+    - text is the first paragraph of the Wikipedia article without any markup.
+    - lang is the language code of the text literal
+
+    """
+    reader = BZ2File if archive_filename.endswith('.bz2') else open
+
+    current_line_number = 0
+    extracted = 0
+
+    with reader(archive_filename, 'rb') as f:
+        for line in f:
+            current_line_number += 1
+            if max_items is not None and extracted > max_items:
+                break
+            if current_line_number % 500000 == 0:
+                logging.info("Decoding line %d", current_line_number)
+            m = TEXT_AND_DATE_LINE_PATTERN.match(line)
+            if m is None:
+                continue
+            title = m.group(1)
+            text = m.group(2)
+            description = m.group(3)
+            if (max_id_length is not None and len(title) > max_id_length):
+                logging.warn("Skipping line %d, with id with length %d",
+                             current_line_number, len(title))
+                continue
+            lang = m.group(4)
+            yield article(title, text, description, lang)
+            extracted += 1
+
 
 
 def dump_as_files(tuples, target_folder):
